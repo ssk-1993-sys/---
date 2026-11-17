@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="最安値くん">
+<meta name="theme-color" content="#2f7d4f">
+<title>スーパー最安値くん（試作）</title>
+<style>
+:root{--bg:#f7f6f2;--card:#fff;--ink:#222;--sub:#6b6b66;--line:#e4e2da;--acc:#2f7d4f;--accbg:#e6f3ea;--warn:#b5541c;--warnbg:#fbece2}
+@media(prefers-color-scheme:dark){:root{--bg:#1b1c1a;--card:#262826;--ink:#ecece8;--sub:#a3a39c;--line:#3a3c39;--acc:#6cc58c;--accbg:#22382b;--warn:#f0a070;--warnbg:#3b2a20}}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 -apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP",sans-serif}
+.wrap{max-width:640px;margin:0 auto;padding:calc(env(safe-area-inset-top) + 12px) 14px calc(env(safe-area-inset-bottom) + 80px)}
+h1{font-size:18px;margin:4px 0 2px}
+.sub{color:var(--sub);font-size:12.5px;margin:0 0 12px}
+.tabs{display:flex;gap:6px;margin:10px 0 14px;position:sticky;top:0;background:var(--bg);padding:6px 0;z-index:2}
+.tabs button{flex:1;padding:9px 4px;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:10px;font:inherit;font-size:13.5px;cursor:pointer}
+.tabs button.on{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:0 0 10px}
+.ct{font-weight:600;margin-bottom:6px}
+.row{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:8px}
+.row.best{background:var(--accbg)}
+.sn{flex:0 0 auto;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.note{flex:1;color:var(--sub);font-size:12px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pr{font-weight:700;font-variant-numeric:tabular-nums}
+.tag{font-size:11px;background:var(--acc);color:#fff;border-radius:6px;padding:0 6px;margin-left:4px}
+.exp{font-size:11px;color:var(--warn);background:var(--warnbg);border-radius:6px;padding:0 6px}
+.x{border:0;background:none;color:var(--sub);cursor:pointer;font-size:17px;padding:2px 6px}
+input,select{font:inherit;font-size:16px;padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);width:100%}
+label{display:block;font-size:12.5px;color:var(--sub);margin:8px 0 2px}
+.btn{display:inline-block;padding:10px 16px;border:0;border-radius:10px;background:var(--acc);color:#fff;font:inherit;font-weight:600;cursor:pointer}
+.btn.ghost{background:var(--card);color:var(--ink);border:1px solid var(--line);font-weight:400}
+.btn[disabled]{opacity:.5}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.chk{display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--line)}
+.chk:last-child{border:0}
+.chk input{width:auto}
+.empty{color:var(--sub);text-align:center;padding:28px 10px}
+.tot{display:flex;justify-content:space-between;padding:4px 0}
+.tot b{font-variant-numeric:tabular-nums}
+.small{font-size:12px;color:var(--sub)}
+.err{font-size:13px;color:var(--warn);background:var(--warnbg);border-radius:8px;padding:8px 10px;margin-top:8px}
+#toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 24px);transform:translateX(-50%);background:#333;color:#fff;padding:9px 16px;border-radius:20px;font-size:13px;opacity:0;pointer-events:none;transition:opacity .2s;max-width:90%}
+#toast.on{opacity:1}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🛒 スーパー最安値くん <span class="small">試作</span></h1>
+  <p class="sub">近所のスーパーを探して、店ごとの価格を登録し、最安の店を比べます。</p>
+  <div class="tabs" id="tabs"></div>
+  <div id="v"></div>
+</div>
+<div id="toast"></div>
+<script>
+"use strict";
+const KEY="price-compare-web-v1";
+let S={stores:[],prices:[],list:[],radius:2};
+let view="compare",q="",pendingDel=null;
+let found=[],finding=false,findErr="",foundInfo="",useChemist=false;
+
+const $=s=>document.querySelector(s);
+const esc=s=>String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const uid=()=>Math.random().toString(36).slice(2,9);
+const today=()=>new Date(Date.now()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,10);
+const yen=n=>"¥"+Number(n).toLocaleString("ja-JP");
+const storeName=id=>(S.stores.find(s=>s.id===id)||{}).name||"(削除済み)";
+const allItems=()=>[...new Set(S.prices.map(p=>p.item))].sort((a,b)=>a.localeCompare(b,"ja"));
+const fmtDist=m=>m<1000?Math.round(m/10)*10+"m":(m/1000).toFixed(1)+"km";
+function latest(item,sid){
+  const a=S.prices.filter(p=>p.item===item&&p.store===sid);
+  a.sort((x,y)=>y.date.localeCompare(x.date)||y.t-x.t);
+  return a[0];
+}
+function toast(t){const e=$("#toast");e.textContent=t;e.classList.add("on");clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove("on"),2600);}
+
+/* ---------- 保存（この端末のブラウザ内） ---------- */
+function save(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){toast("保存できませんでした（プライベートブラウズ中？）")}}
+function load(){
+  try{
+    const v=JSON.parse(localStorage.getItem(KEY)||"null");
+    if(v){S={stores:v.stores||[],prices:v.prices||[],list:v.list||[],radius:v.radius||2}}
+  }catch(e){}
+}
+
+/* ---------- 画面 ---------- */
+function render(){
+  const T=[["compare","価格比較"],["list","買い物リスト"],["add","価格を追加"],["stores","店舗"]];
+  $("#tabs").innerHTML=T.map(([k,n])=>`<button class="${view===k?"on":""}" onclick="go('${k}')">${n}</button>`).join("");
+  const v=$("#v");
+  if(view==="compare"){v.innerHTML=`<input id="q" placeholder="商品名で絞り込み" value="${esc(q)}" oninput="q=this.value;renderCompare()" style="margin-bottom:10px"><div id="cmp"></div>`;renderCompare();}
+  else if(view==="list")v.innerHTML=listHTML();
+  else if(view==="add")v.innerHTML=addHTML();
+  else{v.innerHTML=storesHTML();renderFound();}
+}
+function go(k){view=k;pendingDel=null;render();window.scrollTo(0,0)}
+
+function renderCompare(){
+  const items=allItems().filter(i=>!q||i.includes(q.trim()));
+  if(!allItems().length){$("#cmp").innerHTML=`<div class="empty">まだ価格がありません。<br>「店舗」で近所のスーパーを探して追加し、<br>「価格を追加」で価格を登録してください。<br>サンプルデータで試すこともできます。</div>`;return}
+  if(!items.length){$("#cmp").innerHTML=`<div class="empty">該当する商品がありません</div>`;return}
+  $("#cmp").innerHTML=items.map(item=>{
+    const rows=S.stores.map(s=>({s,p:latest(item,s.id)})).filter(r=>r.p).sort((a,b)=>a.p.price-b.p.price);
+    if(!rows.length)return"";
+    const min=rows[0].p.price;
+    return `<div class="card"><div class="ct">${esc(item)}</div>`+rows.map(r=>{
+      const best=r.p.price===min&&rows.length>1;
+      const exp=r.p.until&&r.p.until<today();
+      const until=r.p.until?` 〜${r.p.until.slice(5).replace("-","/")}`:"";
+      return `<div class="row ${best?"best":""}"><span class="sn">${esc(r.s.name)}${best?'<span class="tag">最安</span>':""}</span><span class="note">${esc(r.p.note||"")}${until}</span>${exp?'<span class="exp">期限切れ</span>':""}<span class="pr">${yen(r.p.price)}</span><button class="x" title="この価格を削除" onclick="delPrice('${r.p.id}')">×</button></div>`;
+    }).join("")+`</div>`;
+  }).join("");
+}
+function delPrice(id){S.prices=S.prices.filter(p=>p.id!==id);S.list=S.list.filter(i=>S.prices.some(p=>p.item===i));save();renderCompare();}
+
+/* 買い物リスト */
+function listHTML(){
+  const items=allItems();
+  if(!items.length)return `<div class="empty">価格が登録されると、ここで商品を選んで<br>店ごとの合計を比べられます。</div>`;
+  let h=`<div class="card"><div class="ct">買うものを選ぶ</div>`+items.map((it,i)=>`<label class="chk" style="margin:0;color:var(--ink);font-size:15px"><input type="checkbox" ${S.list.includes(it)?"checked":""} onchange="toggleList(${i})">${esc(it)}</label>`).join("")+`</div>`;
+  if(S.list.length){
+    const tot=S.stores.map(s=>{let sum=0,miss=0;S.list.forEach(it=>{const p=latest(it,s.id);p?sum+=p.price:miss++});return{s,sum,miss}}).sort((a,b)=>a.miss-b.miss||a.sum-b.sum);
+    h+=`<div class="card"><div class="ct">1店で揃える場合</div>`+tot.map((t,i)=>`<div class="tot"><span>${esc(t.s.name)}${i===0&&t.miss===0&&tot.length>1?'<span class="tag">最安</span>':""}${t.miss?` <span class="small">(未登録${t.miss}品)</span>`:""}</span><b>${yen(t.sum)}${t.miss?"〜":""}</b></div>`).join("")+`</div>`;
+    const by={};let split=0;
+    S.list.forEach(it=>{
+      const rows=S.stores.map(s=>({s,p:latest(it,s.id)})).filter(r=>r.p).sort((a,b)=>a.p.price-b.p.price);
+      if(!rows.length)return;
+      (by[rows[0].s.id]=by[rows[0].s.id]||[]).push({it,price:rows[0].p.price});split+=rows[0].p.price;
+    });
+    h+=`<div class="card"><div class="ct">店を使い分ける場合：${yen(split)}</div>`;
+    Object.keys(by).forEach(sid=>{
+      h+=`<div style="margin-top:6px"><b>${esc(storeName(sid))}</b> <span class="small">小計 ${yen(by[sid].reduce((a,b)=>a+b.price,0))}</span><div class="small">${by[sid].map(x=>esc(x.it)+" "+yen(x.price)).join(" ／ ")}</div></div>`;
+    });
+    const full=tot.filter(t=>t.miss===0);
+    if(full.length){const diff=full[0].sum-split;h+=`<p class="small" style="margin:10px 0 0">${diff>0?`1店で揃えるより ${yen(diff)} 安くなります。`:"1店で揃えるのと同じ金額です。"}</p>`}
+    h+=`</div>`;
+  }
+  return h;
+}
+function toggleList(i){const it=allItems()[i];S.list=S.list.includes(it)?S.list.filter(x=>x!==it):[...S.list,it];save();$("#v").innerHTML=listHTML();}
+
+/* 追加 */
+function storeOptions(){return S.stores.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join("")}
+function addHTML(){
+  if(!S.stores.length)return `<div class="empty">先に「店舗」タブでスーパーを登録してください。<br><br><button class="btn" onclick="go('stores')">店舗を登録する</button></div>`;
+  return `<div class="card"><div class="ct">価格を登録</div>
+  <label>商品名</label><input id="mi" list="dl" placeholder="例：牛乳 1L"><datalist id="dl">${allItems().map(i=>`<option value="${esc(i)}">`).join("")}</datalist>
+  <div class="two"><div><label>店</label><select id="ms">${storeOptions()}</select></div><div><label>価格（円）</label><input id="mp" type="number" inputmode="numeric" min="0"></div></div>
+  <div class="two"><div><label>備考（内容量・条件）</label><input id="mn" placeholder="例：税抜／2点で"></div><div><label>特売の期限（任意）</label><input id="mu" type="date"></div></div>
+  <div style="margin-top:12px"><button class="btn" onclick="addOne()">登録</button></div>
+  <p class="small">登録を続けて入力できます。店と備考は前回の入力が残ります。</p></div>`;
+}
+function addOne(){
+  const item=$("#mi").value.trim(),price=Math.round(Number($("#mp").value));
+  if(!item||!(price>0)){toast("商品名と価格を入力してください");return}
+  S.prices.push({id:uid(),item,store:$("#ms").value,price,note:$("#mn").value.trim(),until:$("#mu").value||"",date:today(),t:Date.now()});
+  save();toast(`${item} を登録しました`);
+  $("#mi").value="";$("#mp").value="";$("#dl").innerHTML=allItems().map(i=>`<option value="${esc(i)}">`).join("");$("#mi").focus();
+}
+
+/* ---------- 周辺のスーパー検索（OpenStreetMap / Overpass） ---------- */
+const OVERPASS=["https://overpass-api.de/api/interpreter","https://overpass.kumi.systems/api/interpreter"];
+function haversine(a,b,c,d){
+  const R=6371000,t=x=>x*Math.PI/180,dl=t(c-a),dn=t(d-b);
+  const h=Math.sin(dl/2)**2+Math.cos(t(a))*Math.cos(t(c))*Math.sin(dn/2)**2;
+  return 2*R*Math.asin(Math.sqrt(h));
+}
+function getPos(){
+  return new Promise((res,rej)=>{
+    if(!navigator.geolocation)return rej(new Error("このブラウザでは位置情報を使えません。"));
+    navigator.geolocation.getCurrentPosition(res,e=>{
+      rej(new Error(e.code===1?"位置情報が許可されていません。iPhoneの「設定」→「プライバシーとセキュリティ」→「位置情報サービス」でSafariを「使用中のみ」にしてください。":e.code===3?"現在地の取得に時間がかかりすぎました。電波の良い場所でもう一度お試しください。":"現在地を取得できませんでした。"));
+    },{enableHighAccuracy:false,timeout:15000,maximumAge:60000});
+  });
+}
+async function overpass(query){
+  let last;
+  for(const url of OVERPASS){
+    try{
+      const ctl=new AbortController(),tm=setTimeout(()=>ctl.abort(),30000);
+      const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:"data="+encodeURIComponent(query),signal:ctl.signal});
+      clearTimeout(tm);
+      if(!r.ok)throw new Error("HTTP "+r.status);
+      return await r.json();
+    }catch(e){last=e}
+  }
+  throw last||new Error("検索サーバーに接続できませんでした");
+}
+async function findStores(){
+  if(finding)return;
+  finding=true;findErr="";found=[];foundInfo="";renderFound();
+  try{
+    const pos=await getPos();
+    const lat=pos.coords.latitude,lon=pos.coords.longitude,r=Math.round(S.radius*1000);
+    const kinds=['"shop"="supermarket"'];if(useChemist)kinds.push('"shop"="chemist"');
+    const body=kinds.map(k=>`nwr[${k}](around:${r},${lat},${lon});`).join("");
+    const data=await overpass(`[out:json][timeout:25];(${body});out center tags;`);
+    const seen=new Set();
+    found=(data.elements||[]).map(e=>{
+      const t=e.tags||{},name=(t["name:ja"]||t.name||"").trim();
+      const la=e.lat??(e.center&&e.center.lat),lo=e.lon??(e.center&&e.center.lon);
+      if(!name||la==null||lo==null)return null;
+      return {osm:e.type+e.id,name,dist:haversine(lat,lon,la,lo),brand:t.brand||t.operator||""};
+    }).filter(x=>x&&!seen.has(x.osm)&&seen.add(x.osm)).sort((a,b)=>a.dist-b.dist);
+    foundInfo=`現在地から${S.radius}km以内：${found.length}件`;
+    if(!found.length)findErr="この範囲では見つかりませんでした。半径を広げるか、店名を手入力で追加してください。";
+  }catch(e){
+    findErr=(e&&e.message)||"検索に失敗しました。通信状況を確認してもう一度お試しください。";
+  }
+  finding=false;renderFound();
+}
+function renderFound(){
+  const o=$("#found");if(!o)return;
+  let h="";
+  if(finding)h=`<div class="small">現在地を確認して、周辺の店を探しています…</div>`;
+  if(findErr)h+=`<div class="err">${esc(findErr)}</div>`;
+  if(foundInfo&&!finding)h+=`<div class="small" style="margin-top:8px">${esc(foundInfo)}</div>`;
+  if(found.length&&!finding){
+    h+=found.map((f,i)=>{
+      const added=S.stores.some(s=>s.osm===f.osm);
+      return `<div class="chk"><div style="flex:1;min-width:0"><div>${esc(f.name)}</div><div class="small">${fmtDist(f.dist)}</div></div>${added?`<span class="small">追加済み</span>`:`<button class="btn" style="padding:6px 14px" onclick="addFound(${i})">追加</button>`}</div>`;
+    }).join("");
+  }
+  o.innerHTML=h;
+}
+function addFound(i){
+  const f=found[i];if(!f||S.stores.some(s=>s.osm===f.osm))return;
+  S.stores.push({id:uid(),name:f.name,osm:f.osm,dist:Math.round(f.dist)});save();toast(`${f.name} を追加しました`);renderFound();
+  const l=$("#mylist");if(l)l.innerHTML=myStoresHTML();
+}
+
+/* 店舗 */
+function myStoresHTML(){
+  return S.stores.length?S.stores.map(s=>`<div class="chk"><span style="flex:1;min-width:0">${esc(s.name)}${s.dist!=null?` <span class="small">${fmtDist(s.dist)}</span>`:""}</span><span class="small">${S.prices.filter(p=>p.store===s.id).length}件</span><button class="btn ghost" style="padding:5px 10px" onclick="delStore('${s.id}')">${pendingDel===s.id?"本当に削除":"削除"}</button></div>`).join(""):`<div class="small">まだ登録されていません</div>`;
+}
+function storesHTML(){
+  return `<div class="card"><div class="ct">現在地の周辺から探す</div>
+  <label>探す範囲</label>
+  <select id="rad" onchange="S.radius=Number(this.value);save()">${[1,2,3,5,10].map(k=>`<option value="${k}" ${S.radius===k?"selected":""}>${k}km 以内</option>`).join("")}</select>
+  <label class="chk" style="margin:8px 0 0;font-size:14px;color:var(--ink);border:0"><input type="checkbox" ${useChemist?"checked":""} onchange="useChemist=this.checked">ドラッグストアも探す</label>
+  <div style="margin-top:8px"><button class="btn" onclick="findStores()" ${finding?"disabled":""}>📍 現在地から探す</button></div>
+  <div id="found"></div>
+  <p class="small">店の情報はOpenStreetMapの地図データです。新しい店や小さな店は載っていないことがあります。</p></div>
+  <div class="card"><div class="ct">登録した店</div><div id="mylist">${myStoresHTML()}</div>
+  <div style="display:flex;gap:8px;margin-top:10px"><input id="sn" placeholder="店名を手入力して追加" onkeydown="if(event.key==='Enter')addStore()"><button class="btn" style="white-space:nowrap" onclick="addStore()">追加</button></div></div>
+  <div class="card"><div class="ct">お試し</div><div class="small">架空のスーパーと商品を入れて、画面の動きを確認できます（実際の価格ではありません）。</div><div style="margin-top:8px"><button class="btn ghost" onclick="seed()">サンプルデータを入れる</button></div></div>`;
+}
+function addStore(){const n=$("#sn").value.trim();if(!n)return;S.stores.push({id:uid(),name:n});save();$("#sn").value="";$("#mylist").innerHTML=myStoresHTML();}
+function delStore(id){
+  if(pendingDel!==id){pendingDel=id;$("#mylist").innerHTML=myStoresHTML();return}
+  S.stores=S.stores.filter(s=>s.id!==id);S.prices=S.prices.filter(p=>p.store!==id);S.list=S.list.filter(i=>S.prices.some(p=>p.item===i));pendingDel=null;save();$("#mylist").innerHTML=myStoresHTML();renderFound();
+}
+function seed(){
+  const a=uid(),b=uid(),c=uid();
+  S.stores.push({id:a,name:"サンプルスーパーA"},{id:b,name:"サンプルスーパーB"},{id:c,name:"サンプルスーパーC"});
+  const D=[["牛乳 1L",218,208,198],["卵 10個",238,258,228],["食パン 6枚切",148,138,158],["豚こま切れ 100g",98,88,0],["キャベツ 1玉",198,178,208],["玉ねぎ 3個",148,158,128],["木綿豆腐 3パック",98,108,88]];
+  D.forEach(([item,pa,pb,pc])=>[[a,pa],[b,pb],[c,pc]].forEach(([s,p])=>{if(p>0)S.prices.push({id:uid(),item,store:s,price:p,note:"サンプル",until:"",date:today(),t:Date.now()})}));
+  save();toast("サンプルデータを入れました");view="compare";render();
+}
+load();render();
+</script>
+</body>
+</html>
